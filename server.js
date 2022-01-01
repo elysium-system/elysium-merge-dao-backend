@@ -21,14 +21,40 @@ const MERGE_ADDRESS = '0xc3f8a0F5841aBFf777d3eefA5047e8D413a1C9AB';
 const provider = new ethers.providers.WebSocketProvider(RPC_URL, 'homestead');
 const mergeContract = new ethers.Contract(MERGE_ADDRESS, mergeAbi, provider);
 
-const fetchMerges = async () => {
+const mergeSchema = new mongoose.Schema(
+  {
+    tokenId: {
+      type: Number,
+      required: true,
+      index: {
+        unique: true,
+      },
+    },
+    isExisted: {
+      type: Boolean,
+      required: true,
+    },
+    tier: {
+      type: Number,
+      required: true,
+    },
+    mass: {
+      type: Number,
+      required: true,
+    },
+  },
+  { timestamps: true },
+);
+
+const Merge = mongoose.model('Merge', mergeSchema);
+
+const fetchAndSaveMerges = async () => {
   const nextId = await mergeContract._nextMintId();
   const tokenIds = new Array(nextId.toNumber() - 1)
     .fill(null)
     .map((_, idx) => idx + 1);
   const numConcurrReqs = 1000;
-  return new Promise((resolve, reject) => {
-    let merges = [];
+  await new Promise((resolve, reject) => {
     from(tokenIds)
       .pipe(
         groupBy((tokenId) => tokenId % numConcurrReqs),
@@ -61,45 +87,18 @@ const fetchMerges = async () => {
         error: (err) => {
           reject(err);
         },
-        next: (res) => {
-          merges = [...merges, res];
+        next: (m) => {
+          Merge.updateOne({ tokenId: m.tokenId }, m, { upsert: true });
         },
         complete: () => {
-          resolve(merges);
+          resolve();
         },
       });
-  });
+  }).catch(console.error);
 };
 
-const mergeSchema = new mongoose.Schema(
-  {
-    tokenId: {
-      type: Number,
-      required: true,
-      index: {
-        unique: true,
-      },
-    },
-    isExisted: {
-      type: Boolean,
-      required: true,
-    },
-    tier: {
-      type: Number,
-      required: true,
-    },
-    mass: {
-      type: Number,
-      required: true,
-    },
-  },
-  { timestamps: true },
-);
-
-const Merge = mongoose.model('Merge', mergeSchema);
-
 const program = new commander.Command();
-program.option('--skip', 'Skip fetching all merges', false);
+program.option('--skip', 'Skip db init', false);
 program.parse(process.argv);
 const options = program.opts();
 
@@ -109,29 +108,66 @@ const options = program.opts();
   const server = express();
 
   if (!options.skip) {
-    console.log('Fetching merges...');
-    const merges = await fetchMerges();
-    await Promise.all(
-      merges.map((m) =>
-        Merge.updateOne({ tokenId: m.tokenId }, m, { upsert: true }),
-      ),
-    );
+    console.log('Initialize DB...');
+    await fetchAndSaveMerges();
   }
+  setInterval(fetchAndSaveMerges, 30 * 60 * 1000);
+
+  mergeContract.on(
+    'MassUpdate',
+    async (tokenIdSmall, tokenIdLarge, combinedMass) => {
+      const smallerMerge = await Merge.findOneAndUpdate(
+        { tokenId: tokenIdSmall },
+        { isExisted: false, tier: 0, mass: 0 },
+      ).exec();
+
+      if (tokenIdLarge.eq(ethers.constants.Zero)) {
+        return;
+      }
+      const largerMerge = await Merge.findOneAndUpdate(
+        { tokenId: tokenIdLarge },
+        { mass: combinedMass },
+      ).exec();
+
+      switch (smallerMerge?.tier) {
+        case 1: {
+          console.log(
+            `m(${smallerMerge.mass}) #${smallerMerge.tokenId} is killed by m(${largerMerge.mass} #${largerMerge.tokenId})`,
+          );
+          break;
+        }
+        case 2: {
+          console.log(
+            `Yellow m(${smallerMerge.mass}) #${smallerMerge.tokenId} is killed by m(${largerMerge.mass} #${largerMerge.tokenId})`,
+          );
+          break;
+        }
+        case 3: {
+          console.log(
+            `Blue m(${smallerMerge.mass}) #${smallerMerge.tokenId} is killed by m(${largerMerge.mass} #${largerMerge.tokenId})`,
+          );
+          break;
+        }
+        default: {
+        }
+      }
+    },
+  );
 
   server.get('/blue', async (req, res) => {
     const merge = await Merge.findOne({ tokenId: BLUE_TOKEN_ID }).exec();
-    const numBiggerMerges = await Merge.countDocuments({
+    const numLargerMerges = await Merge.countDocuments({
       isExisted: true,
       tier: 3,
       mass: { $gt: merge.mass },
     });
     res.json({
       mass: merge.mass,
-      rank: numBiggerMerges + 1,
+      rank: numLargerMerges + 1,
     });
   });
 
   server.listen(Number(PORT), () => {
-    console.log(`Listening at http://localhost:${PORT}`);
+    console.log(`Listening at http://localhost:${PORT}...`);
   });
 })();
