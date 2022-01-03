@@ -57,6 +57,10 @@ const NUM_ALL_MERGES = 28990;
           type: Number,
           required: true,
         },
+        isAlpha: {
+          type: Boolean,
+          required: true,
+        },
       },
       { timestamps: true },
     );
@@ -65,6 +69,7 @@ const NUM_ALL_MERGES = 28990;
 
     const fetchAndSaveMerges = async () => {
       try {
+        const alphaId = await mergeContract._alphaId();
         const tokenIds = new Array(NUM_ALL_MERGES)
           .fill(null)
           .map((_, idx) => idx + 1);
@@ -87,6 +92,7 @@ const NUM_ALL_MERGES = 28990;
                             isExisted: true,
                             tier: tier.toNumber(),
                             mass: mass.toNumber(),
+                            isAlpha: tokenId === alphaId.toNumber(),
                           };
                         } catch (err) {
                           return {
@@ -94,6 +100,7 @@ const NUM_ALL_MERGES = 28990;
                             isExisted: false,
                             tier: 0,
                             mass: 0,
+                            isAlpha: false,
                           };
                         }
                       })(),
@@ -155,7 +162,7 @@ const NUM_ALL_MERGES = 28990;
       async (tokenIdSmall, tokenIdLarge, combinedMass) => {
         try {
           const smallerMerge = await Merge.findOneAndUpdate(
-            { tokenId: tokenIdSmall },
+            { tokenId: tokenIdSmall.toNumber() },
             { isExisted: false, tier: 0, mass: 0 },
           ).exec();
           if (!smallerMerge) {
@@ -166,8 +173,8 @@ const NUM_ALL_MERGES = 28990;
             return;
           }
           const largerMerge = await Merge.findOneAndUpdate(
-            { tokenId: tokenIdLarge },
-            { mass: combinedMass },
+            { tokenId: tokenIdLarge.toNumber() },
+            { mass: combinedMass.toNumber() },
           ).exec();
           if (!largerMerge) {
             return;
@@ -176,17 +183,37 @@ const NUM_ALL_MERGES = 28990;
           const largerMergeOwner = await mergeContract.ownerOf(
             largerMerge.tokenId,
           );
+          const largerMergeOwnerEns = await provider.lookupAddress(
+            largerMergeOwner,
+          );
           const numRemainingMerges = await Merge.countDocuments({
             isExisted: true,
           });
-          const text = `m(${smallerMerge.mass}) #${smallerMerge.tokenId} + m(${
-            largerMerge.mass
-          }) #${largerMerge.tokenId} = m(${
-            smallerMerge.mass + largerMerge.mass
-          }) #${largerMerge.tokenId}
-https://opensea.io/assets/${MERGE_ADDRESS}/${largerMerge.tokenId}
-${smallerMerge.tier > largerMerge.tier ? `Murderer: ${largerMergeOwner}\n` : ''}
+          const mergeTierToEmoji = {
+            1: '⚪️',
+            2: '🟡',
+            3: '🔵',
+            4: '🔴',
+          };
+          const alphaEmoji = '⚫️';
+          const alphaId = await mergeContract._alphaId();
+          const text = `${mergeTierToEmoji[`${smallerMerge.tier}`]} (${
+            smallerMerge.mass
+          }) #${smallerMerge.tokenId} + ${
+            largerMerge.isAlpha
+              ? alphaEmoji
+              : mergeTierToEmoji[`${largerMerge.tier}`]
+          } (${largerMerge.mass}) #${largerMerge.tokenId} = ${
+            largerMerge.tokenId === alphaId.toNumber()
+              ? alphaEmoji
+              : mergeTierToEmoji[`${largerMerge.tier}`]
+          } (${smallerMerge.mass + largerMerge.mass}) #${largerMerge.tokenId}${
+            smallerMerge.tier > largerMerge.tier
+              ? `\nMurderer: ${largerMergeOwnerEns || largerMergeOwner}`
+              : ''
+          }
 ${numRemainingMerges}/${NUM_ALL_MERGES} remain
+link: https://opensea.io/assets/${MERGE_ADDRESS}/${largerMerge.tokenId}
 `;
           console.log(text);
 
@@ -211,6 +238,16 @@ ${numRemainingMerges}/${NUM_ALL_MERGES} remain
         }
       },
     );
+    mergeContract.on('AlphaMassUpdate', async (alphaId) => {
+      try {
+        await Merge.findOneAndUpdate(
+          { tokenId: alphaId.toNumber() },
+          { isAlpha: true },
+        ).exec();
+      } catch (err) {
+        console.error(err);
+      }
+    });
 
     const server = express();
 
