@@ -199,7 +199,7 @@ const NUM_ALL_MERGES = 28990;
           const alphaId = await mergeContract._alphaId();
           const text = `${mergeTierToEmoji[`${smallerMerge.tier}`]} (${
             smallerMerge.mass
-          }) #${smallerMerge.tokenId} + ${
+          }) #${smallerMerge.tokenId} → ${
             largerMerge.isAlpha
               ? alphaEmoji
               : mergeTierToEmoji[`${largerMerge.tier}`]
