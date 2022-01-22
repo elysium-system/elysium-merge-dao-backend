@@ -259,10 +259,15 @@ link: https://opensea.io/assets/${MERGE_ADDRESS}/${largerMerge.tokenId}
           tier: 3,
           mass: { $gt: blue.mass },
         });
+        const numLargerMerges = await Merge.countDocuments({
+          isExisted: true,
+          mass: { $gt: blue.mass },
+        });
         const owner = await mergeContract.ownerOf(blue.tokenId);
         res.json({
           mass: blue.mass,
           rank: numLargerBlues + 1,
+          overallRank: numLargerMerges + 1,
           owner,
         });
       } catch (err) {
